@@ -59,12 +59,33 @@ public final class GranizmProotWrapper {
 
     /**
      * @return {@code true} if the given executable should be wrapped with proot.
-     *         Currently this returns true when the executable lives under our
-     *         {@code $PREFIX/bin/} and the proot binary is executable on disk.
+     *
+     * <p>r10 change: proot wrap is now <strong>opt-in</strong> via the env var
+     * {@code TERMUX_GRANIZM_USE_PROOT=1}. The rebuilt bootstrap has the granizm
+     * paths baked into every package, so the interactive shell, basic utilities,
+     * {@code apt update}, {@code apt-get download}, {@code ssh}, etc. work
+     * <strong>without proot</strong>. The only thing proot was needed for was
+     * upstream {@code dpkg -i} where deb files contain hardcoded
+     * {@code /data/data/com.termux/...} paths.
+     *
+     * <p>On a number of arm64 Android devices, the bundled proot binary fails
+     * with ENOSYS during its setup (likely kernel/seccomp incompatibility),
+     * which previously broke the very first shell launch. Making the wrap
+     * opt-in guarantees the shell starts everywhere; users who need
+     * {@code dpkg -i} of upstream packages can either:
+     *   <ol>
+     *     <li>{@code export TERMUX_GRANIZM_USE_PROOT=1} in
+     *         {@code ~/.bashrc} (if proot works on their device), or</li>
+     *     <li>use the {@code granizm-pkg} wrapper (see scripts) which handles
+     *         path-translated install without proot.</li>
+     *   </ol>
      */
     public static boolean shouldWrap(@Nullable String executable) {
         if (executable == null) return false;
         if (!executable.startsWith(TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH + "/")) return false;
+        // Opt-in: only wrap when explicitly enabled via env var.
+        String optIn = System.getenv("TERMUX_GRANIZM_USE_PROOT");
+        if (optIn == null || !optIn.equals("1")) return false;
         File proot = new File(PROOT_PATH);
         return proot.exists() && proot.canExecute();
     }
