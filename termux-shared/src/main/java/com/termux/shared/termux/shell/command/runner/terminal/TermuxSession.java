@@ -8,6 +8,7 @@ import androidx.annotation.Nullable;
 
 import com.google.common.base.Joiner;
 import com.termux.shared.R;
+import com.termux.shared.granizm.GranizmProotWrapper;
 import com.termux.shared.shell.command.ExecutionCommand;
 import com.termux.shared.shell.command.environment.ShellEnvironmentUtils;
 import com.termux.shared.shell.command.environment.UnixShellEnvironment;
@@ -138,6 +139,21 @@ public class TermuxSession {
             executionCommand);
         if (additionalEnvironment != null)
             environment.putAll(additionalEnvironment);
+
+        // granizm fork: wrap interactive shell exec with `proot` so that upstream
+        // termux APT packages (built with /data/data/com.termux/files/usr/ paths
+        // baked in) work transparently after install. Only applies when the
+        // executable is one of our $PREFIX/bin/* shells and `proot` is present.
+        String finalExecutable = executionCommand.executable;
+        String[] finalArguments = executionCommand.arguments;
+        if (GranizmProotWrapper.shouldWrap(finalExecutable)) {
+            GranizmProotWrapper.WrapResult wrapped = GranizmProotWrapper.wrap(finalExecutable, finalArguments);
+            finalExecutable = wrapped.executable;
+            finalArguments = wrapped.arguments;
+            GranizmProotWrapper.applyProotEnvironment(environment);
+            Logger.logDebug(LOG_TAG, "granizm: wrapped exec with proot -> " + finalExecutable);
+        }
+
         List<String> environmentList = ShellEnvironmentUtils.convertEnvironmentToEnviron(environment);
         Collections.sort(environmentList);
         String[] environmentArray = environmentList.toArray(new String[0]);
@@ -153,8 +169,8 @@ public class TermuxSession {
             Joiner.on("\n").join(environmentArray));
 
         Logger.logDebug(LOG_TAG, "Running \"" + executionCommand.getCommandIdAndLabelLogString() + "\" TermuxSession");
-        TerminalSession terminalSession = new TerminalSession(executionCommand.executable,
-            executionCommand.workingDirectory, executionCommand.arguments, environmentArray,
+        TerminalSession terminalSession = new TerminalSession(finalExecutable,
+            executionCommand.workingDirectory, finalArguments, environmentArray,
             executionCommand.terminalTranscriptRows, terminalSessionClient);
 
         if (executionCommand.shellName != null) {
