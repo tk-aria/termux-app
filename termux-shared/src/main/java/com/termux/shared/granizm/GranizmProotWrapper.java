@@ -86,8 +86,18 @@ public final class GranizmProotWrapper {
     @NonNull
     public static WrapResult wrap(@NonNull String originalExecutable,
                                   @NonNull String[] originalArguments) {
+        // Make sure PROOT_TMP_DIR exists before proot tries to use it. Without
+        // this, proot's cleanup-on-failure path emits "trying to remove a
+        // directory outside of '<PROOT_TMP_DIR>'" garbage that obscures the
+        // real failure (and on some kernels even prevents proot from setting up).
+        new File(PROOT_TMP_DIR).mkdirs();
+
         List<String> prootArgs = new ArrayList<>();
         prootArgs.add("--kill-on-exit");
+        // Start the guest in the user's HOME (a known-existing path inside the
+        // proot view) so proot doesn't inherit a host-side cwd that may not be
+        // visible after bindings are applied.
+        prootArgs.add("--cwd=" + TermuxConstants.TERMUX_HOME_DIR_PATH);
 
         // System binds: required for Termux binaries to find /system/bin/linker64,
         // /apex libs (Android 10+), /linkerconfig (Android 11+), /vendor libs, etc.
@@ -103,6 +113,7 @@ public final class GranizmProotWrapper {
         addBindIfExists(prootArgs, "/storage");
 
         // The critical bind: make our files dir visible as com.termux's files dir.
+        // Order matters — these come after /data so they win for overlapping paths.
         prootArgs.add("-b");
         prootArgs.add(TermuxConstants.TERMUX_FILES_DIR_PATH + ":" + UPSTREAM_COM_TERMUX_FILES);
         prootArgs.add("-b");
@@ -141,6 +152,13 @@ public final class GranizmProotWrapper {
         env.put("PROOT_LOADER", PROOT_LOADER);
         env.put("PROOT_LOADER_32", PROOT_LOADER_32);
         env.put("PROOT_TMP_DIR", PROOT_TMP_DIR);
+        // Disable proot's seccomp acceleration — on some arm64 Android kernels
+        // (notably 4.14-4.19 with strict seccomp filter) the seccomp path returns
+        // ENOSYS on execve, producing
+        //   "proot error: execve(...): Function not implemented".
+        // Disabling falls back to pure ptrace (slower but universally compatible).
+        // r9 fix for issues seen on user's arm64 device.
+        env.put("PROOT_NO_SECCOMP", "1");
         env.put(SENTINEL_ENV_VAR, "1");
         return env;
     }

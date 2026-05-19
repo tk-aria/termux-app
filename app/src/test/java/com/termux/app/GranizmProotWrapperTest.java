@@ -102,6 +102,35 @@ public class GranizmProotWrapperTest {
     }
 
     @Test
+    public void prootEnvironmentDisablesSeccomp() {
+        // r9: PROOT_NO_SECCOMP=1 avoids ENOSYS-from-seccomp-filter on some
+        // arm64 Android kernels. Falls back to pure ptrace (slower but
+        // universally compatible). Asserting this stays set guards against
+        // accidental removal during future refactors.
+        Map<String, String> env = GranizmProotWrapper.getProotEnvironment();
+        Assert.assertEquals("1", env.get("PROOT_NO_SECCOMP"));
+    }
+
+    @Test
+    public void wrappedArgsContainCwdToHome() {
+        // r9: --cwd points proot to a path that exists inside the guest view.
+        // Without this, the inherited cwd may be host-side and unreachable
+        // after bindings, leading to "can't chdir to '..'" cleanup errors.
+        GranizmProotWrapper.WrapResult result = GranizmProotWrapper.wrap(
+            PREFIX + "/bin/login", new String[] { "-login" });
+        boolean found = false;
+        for (String a : result.arguments) {
+            if (a.startsWith("--cwd=") && a.endsWith("/files/home")) {
+                found = true;
+                break;
+            }
+        }
+        Assert.assertTrue(
+            "expected --cwd=<HOME> in wrapped args, got: " + Arrays.toString(result.arguments),
+            found);
+    }
+
+    @Test
     public void shouldNotWrapNonShellPaths() {
         // Arbitrary native command executions (not under $PREFIX/bin) must not
         // be wrapped — wrap is for interactive shells only.
