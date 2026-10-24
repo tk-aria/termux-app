@@ -258,4 +258,38 @@ public class TermuxAppSharedPreferences extends AppSharedPreferences {
         SharedPreferenceUtils.setBoolean(mSharedPreferences, TERMUX_APP.KEY_CRASH_REPORT_NOTIFICATIONS_ENABLED, value, false);
     }
 
+
+
+    /**
+     * Clamps {@code value} to the [{@link TERMUX_APP#MIN_VALUE_MAX_TERMINAL_SESSIONS},
+     * {@link TERMUX_APP#MAX_VALUE_MAX_TERMINAL_SESSIONS}] range.
+     */
+    public static int clampMaxTerminalSessions(int value) {
+        return DataUtils.clamp(value, TERMUX_APP.MIN_VALUE_MAX_TERMINAL_SESSIONS, TERMUX_APP.MAX_VALUE_MAX_TERMINAL_SESSIONS);
+    }
+
+    /**
+     * Parses {@code value} as an int and clamps it to the valid range, falling back to the
+     * clamped {@code def} if {@code value} is {@code null} or not a valid integer.
+     */
+    public static int parseMaxTerminalSessions(@Nullable String value, int def) {
+        if (value == null)
+            return clampMaxTerminalSessions(def);
+
+        try {
+            return clampMaxTerminalSessions(Integer.parseInt(value.trim()));
+        } catch (NumberFormatException e) {
+            return clampMaxTerminalSessions(def);
+        }
+    }
+
+    public int getMaxTerminalSessions() {
+        String value = SharedPreferenceUtils.getString(mSharedPreferences, TERMUX_APP.KEY_MAX_TERMINAL_SESSIONS, null, true);
+        return parseMaxTerminalSessions(value, TERMUX_APP.DEFAULT_VALUE_MAX_TERMINAL_SESSIONS);
+    }
+
+    public void setMaxTerminalSessions(int value) {
+        SharedPreferenceUtils.setIntStoredAsString(mSharedPreferences, TERMUX_APP.KEY_MAX_TERMINAL_SESSIONS, clampMaxTerminalSessions(value), false);
+    }
+
 }

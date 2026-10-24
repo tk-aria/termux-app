@@ -2,8 +2,10 @@ package com.termux.app.fragments.settings.termux;
 
 import android.content.Context;
 import android.os.Bundle;
+import android.text.InputType;
 
 import androidx.annotation.Keep;
+import androidx.preference.EditTextPreference;
 import androidx.preference.PreferenceDataStore;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.PreferenceManager;
@@ -23,6 +25,12 @@ public class TerminalIOPreferencesFragment extends PreferenceFragmentCompat {
         preferenceManager.setPreferenceDataStore(TerminalIOPreferencesDataStore.getInstance(context));
 
         setPreferencesFromResource(R.xml.termux_terminal_io_preferences, rootKey);
+
+        EditTextPreference maxTerminalSessionsPreference = findPreference("max_terminal_sessions");
+        if (maxTerminalSessionsPreference != null) {
+            maxTerminalSessionsPreference.setOnBindEditTextListener(editText ->
+                editText.setInputType(InputType.TYPE_CLASS_NUMBER));
+        }
     }
 
 }
@@ -76,6 +84,35 @@ class TerminalIOPreferencesDataStore extends PreferenceDataStore {
                 return mPreferences.isSoftKeyboardEnabledOnlyIfNoHardware();
             default:
                 return false;
+        }
+    }
+
+
+
+    @Override
+    public void putString(String key, String value) {
+        if (mPreferences == null) return;
+        if (key == null) return;
+
+        switch (key) {
+            case "max_terminal_sessions":
+                mPreferences.setMaxTerminalSessions(
+                    TermuxAppSharedPreferences.parseMaxTerminalSessions(value, mPreferences.getMaxTerminalSessions()));
+                break;
+            default:
+                break;
+        }
+    }
+
+    @Override
+    public String getString(String key, String defValue) {
+        if (mPreferences == null) return defValue;
+
+        switch (key) {
+            case "max_terminal_sessions":
+                return String.valueOf(mPreferences.getMaxTerminalSessions());
+            default:
+                return defValue;
         }
     }
 

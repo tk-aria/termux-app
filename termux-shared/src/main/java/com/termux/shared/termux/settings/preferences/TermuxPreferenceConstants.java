@@ -180,6 +180,14 @@ public final class TermuxPreferenceConstants {
         public static final String KEY_CRASH_REPORT_NOTIFICATIONS_ENABLED = "crash_report_notifications_enabled";
         public static final boolean DEFAULT_VALUE_CRASH_REPORT_NOTIFICATIONS_ENABLED = true;
 
+        /**
+         * Defines the key for the maximum number of terminal sessions that can be created.
+         */
+        public static final String KEY_MAX_TERMINAL_SESSIONS = "max_terminal_sessions";
+        public static final int DEFAULT_VALUE_MAX_TERMINAL_SESSIONS = 10;
+        public static final int MIN_VALUE_MAX_TERMINAL_SESSIONS = 1;
+        public static final int MAX_VALUE_MAX_TERMINAL_SESSIONS = 30;
+
     }
 
 

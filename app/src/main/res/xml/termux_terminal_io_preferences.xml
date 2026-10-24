@@ -18,4 +18,15 @@
 
     </PreferenceCategory>
 
+    <PreferenceCategory
+        app:key="session"
+        app:title="@string/termux_session_header">
+
+        <EditTextPreference
+            app:key="max_terminal_sessions"
+            app:summary="@string/termux_max_terminal_sessions_summary"
+            app:title="@string/termux_max_terminal_sessions_title" />
+
+    </PreferenceCategory>
+
 </PreferenceScreen>

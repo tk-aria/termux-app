@@ -188,6 +188,14 @@
                 <string name="termux_soft_keyboard_enabled_only_if_no_hardware_on">Soft keyboard will be enabled only if
                     no hardware keyboard is connected.</string>
 
+            <!-- Session Category -->
+            <string name="termux_session_header">Session</string>
+
+                <!-- Max Terminal Sessions -->
+                <string name="termux_max_terminal_sessions_title">Max Terminal Sessions</string>
+                <string name="termux_max_terminal_sessions_summary">Maximum number of terminal sessions that can be
+                    created at once (1-30, default 10).</string>
+
 
         <!-- Terminal View Preferences -->
         <string name="termux_terminal_view_preferences_title">Terminal View</string>
