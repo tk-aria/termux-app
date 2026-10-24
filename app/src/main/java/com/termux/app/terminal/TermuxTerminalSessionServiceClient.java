@@ -28,4 +28,15 @@ public class TermuxTerminalSessionServiceClient extends TermuxTerminalSessionCli
             termuxSession.getExecutionCommand().mPid = pid;
     }
 
+    /**
+     * One of the session persistence triggers: debounce a snapshot save whenever a session's
+     * screen content changes, so that normal terminal activity periodically (but not on every
+     * single byte) keeps the on-disk state fresh. See docs/report/session-persistence.md.
+     */
+    @Override
+    public void onTextChanged(@NonNull TerminalSession changedSession) {
+        super.onTextChanged(changedSession);
+        mService.scheduleDebouncedSessionPersistenceSave();
+    }
+
 }

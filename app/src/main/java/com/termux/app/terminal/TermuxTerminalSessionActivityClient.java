@@ -358,6 +358,9 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
             TermuxSession termuxSession = service.getTermuxSessionForTerminalSession(sessionToRename);
             if (termuxSession != null)
                 termuxSession.getExecutionCommand().shellName = text;
+
+            // Session persistence trigger: the saved tab name must not go stale after a rename.
+            service.saveSessionPersistenceStateSafely();
         }
     }
 

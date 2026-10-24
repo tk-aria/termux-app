@@ -29,6 +29,12 @@ public class TermuxApplication extends Application {
         // Set crash handler for the app
         TermuxCrashUtils.setDefaultCrashHandler(this);
 
+        // Session persistence trigger: an uncaught exception likely means the process is about to
+        // die, so try to save terminal session state first. The previously installed handler
+        // (TermuxCrashUtils' CrashHandler, or whatever was set before it) is always preserved and
+        // delegated to afterwards, so crash logging/reporting behaviour is unchanged.
+        installSessionPersistenceUncaughtExceptionHandler();
+
         // Set log config for the app
         setLogConfig(context);
 
@@ -71,6 +77,28 @@ public class TermuxApplication extends Application {
         if (isTermuxFilesDirectoryAccessible) {
             TermuxShellEnvironment.writeEnvironmentToFile(this);
         }
+    }
+
+    /**
+     * Wraps whatever {@link Thread.UncaughtExceptionHandler} is currently installed so that a
+     * session persistence save is attempted first, then always delegates to the previous handler
+     * unconditionally so existing crash logging/reporting/process-death behaviour is unchanged.
+     *
+     * Must not throw: an exception here would otherwise replace the original crash with a new,
+     * unrelated one.
+     */
+    private void installSessionPersistenceUncaughtExceptionHandler() {
+        final Thread.UncaughtExceptionHandler previousHandler = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            try {
+                TermuxService.trySaveRunningServiceSessionPersistenceStateSafely();
+            } catch (Throwable t) {
+                Logger.logError(LOG_TAG, "Failed to save session persistence state from uncaught exception handler: " + t.getMessage());
+            }
+
+            if (previousHandler != null)
+                previousHandler.uncaughtException(thread, throwable);
+        });
     }
 
     public static void setLogConfig(Context context) {

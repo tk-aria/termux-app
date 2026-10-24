@@ -192,6 +192,17 @@
             android:name=".shared.activities.ReportActivity$ReportActivityBroadcastReceiver"
             android:exported="false" />
 
+        <!-- Session persistence: last-resort save of terminal session state on device
+             shutdown/reboot. See docs/report/session-persistence.md. -->
+        <receiver
+            android:name=".app.event.SessionPersistenceShutdownReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.ACTION_SHUTDOWN" />
+                <action android:name="android.intent.action.REBOOT" />
+            </intent-filter>
+        </receiver>
+
 
         <service
             android:name=".app.TermuxService"

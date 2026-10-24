@@ -37,6 +37,9 @@ import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_SERVICE;
 import com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences;
 import com.termux.shared.termux.shell.TermuxShellManager;
 import com.termux.shared.termux.shell.command.runner.terminal.TermuxSession;
+import com.termux.shared.termux.shell.session.SessionPersistenceManager;
+import com.termux.shared.termux.shell.session.SessionPersistenceState;
+import com.termux.shared.termux.shell.session.TerminalSessionSnapshot;
 import com.termux.shared.termux.terminal.TermuxTerminalSessionClientBase;
 import com.termux.shared.logger.Logger;
 import com.termux.shared.notification.NotificationUtils;
@@ -49,6 +52,7 @@ import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalSessionClient;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -105,7 +109,49 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     /** If the user has executed the {@link TERMUX_SERVICE#ACTION_STOP_SERVICE} intent. */
     boolean mWantsToStop = false;
 
+    /** Debounce delay for {@link #scheduleDebouncedSessionPersistenceSave()}, coalescing bursts of terminal output. */
+    private static final long SESSION_PERSISTENCE_DEBOUNCE_SAVE_DELAY_MS = 3_000;
+
+    private final Runnable mSessionPersistenceDebouncedSaveRunnable = this::saveSessionPersistenceStateSafely;
+
+    /** Whether terminal sessions have already been restored from disk in this process lifetime. */
+    private boolean mSessionPersistenceRestoreAttempted = false;
+
+    /**
+     * Placeholder terminal dimensions used to force-initialize a restored session's emulator (see
+     * {@link #restorePersistedSessionsIfNeeded()}) before any {@link com.termux.view.TerminalView}
+     * has attached to it. Values are arbitrary/typical-phone-sized; {@link TerminalSession#updateSize}
+     * reflows (does not re-spawn the shell) once the real view attaches with actual dimensions.
+     */
+    private static final int RESTORE_PLACEHOLDER_COLUMNS = 80;
+    private static final int RESTORE_PLACEHOLDER_ROWS = 24;
+    private static final int RESTORE_PLACEHOLDER_CELL_WIDTH_PIXELS = 24;
+    private static final int RESTORE_PLACEHOLDER_CELL_HEIGHT_PIXELS = 48;
+
+    /**
+     * The currently running {@link TermuxService} instance, if any, so that process-wide hooks
+     * that have no service reference of their own (the uncaught exception handler installed by
+     * {@link com.termux.app.TermuxApplication}) can still trigger a graceful save.
+     */
+    @Nullable
+    private static volatile TermuxService sRunningService;
+
     private static final String LOG_TAG = "TermuxService";
+
+    /**
+     * Saves session persistence state for the currently running {@link TermuxService} instance,
+     * if any. Safe to call from any context (e.g. the process-wide uncaught exception handler)
+     * since it never throws.
+     */
+    public static void trySaveRunningServiceSessionPersistenceStateSafely() {
+        TermuxService service = sRunningService;
+        if (service == null) return;
+        try {
+            service.saveSessionPersistenceStateSafely();
+        } catch (Exception e) {
+            Logger.logError(LOG_TAG, "Failed to save session persistence state: " + e.getMessage());
+        }
+    }
 
     @Override
     public void onCreate() {
@@ -117,9 +163,13 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
         mShellManager = TermuxShellManager.getShellManager();
 
+        sRunningService = this;
+
         runStartForeground();
 
         SystemEventReceiver.registerPackageUpdateEvents(this);
+
+        restorePersistedSessionsIfNeeded();
     }
 
     @SuppressLint("Wakelock")
@@ -169,6 +219,13 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     public void onDestroy() {
         Logger.logVerbose(LOG_TAG, "onDestroy");
 
+        mHandler.removeCallbacks(mSessionPersistenceDebouncedSaveRunnable);
+
+        // If the user explicitly asked to stop the service/exit Termux, do not persist state,
+        // since sessions would otherwise be unexpectedly resurrected on next launch.
+        if (!mWantsToStop)
+            saveSessionPersistenceStateSafely();
+
         TermuxShellUtils.clearTermuxTMPDIR(true);
 
         actionReleaseWakeLock(false);
@@ -180,6 +237,46 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         SystemEventReceiver.unregisterPackageUpdateEvents(this);
 
         runStopForeground();
+
+        if (sRunningService == this)
+            sRunningService = null;
+    }
+
+    /**
+     * Called by the system when overall memory pressure changes, including when the app's UI is
+     * no longer visible ({@link android.content.ComponentCallbacks2#TRIM_MEMORY_UI_HIDDEN}) or
+     * the process is a likely kill candidate
+     * ({@link android.content.ComponentCallbacks2#TRIM_MEMORY_RUNNING_CRITICAL}/
+     * {@link android.content.ComponentCallbacks2#TRIM_MEMORY_COMPLETE}). None of these guarantee
+     * {@link #onDestroy()} will run afterwards, so this is one more opportunistic save point.
+     */
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        Logger.logVerbose(LOG_TAG, "onTrimMemory: level=" + level);
+
+        switch (level) {
+            case android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN:
+            case android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL:
+            case android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE:
+                if (!mWantsToStop)
+                    saveSessionPersistenceStateSafely();
+                break;
+            default:
+                break;
+        }
+    }
+
+    /**
+     * Called when the user removes Termux from the recent apps list (swipes it away) while the
+     * service is still running. This is one of the triggers that persists terminal session state
+     * to disk, since the service (and its sessions) may be killed shortly after by the system.
+     */
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        Logger.logVerbose(LOG_TAG, "onTaskRemoved");
+        saveSessionPersistenceStateSafely();
+        super.onTaskRemoved(rootIntent);
     }
 
     @Override
@@ -622,6 +719,9 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         // No need to recreate the activity since it likely just started and theme should already have applied
         TermuxActivity.updateTermuxActivityStyling(this, false);
 
+        // Session persistence trigger: a new tab changes the saved tab list/order immediately.
+        saveSessionPersistenceStateSafely();
+
         return newTermuxSession;
     }
 
@@ -653,6 +753,10 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
             // activity in is foreground
             if (mTermuxTerminalSessionActivityClient != null)
                 mTermuxTerminalSessionActivityClient.termuxSessionListNotifyUpdated();
+
+            // Session persistence trigger: a closed tab must not be resurrected on next restore.
+            if (!mWantsToStop)
+                saveSessionPersistenceStateSafely();
         }
 
         updateNotification();
@@ -954,6 +1058,98 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
     public boolean wantsToStop() {
         return mWantsToStop;
+    }
+
+
+    /*
+     * Session persistence (save/restore tabs, cwd, screen/scrollback, cursor across restarts).
+     * See docs/report/session-persistence.md for the full design.
+     */
+
+    @NonNull
+    private File getSessionPersistenceStateFile() {
+        return SessionPersistenceManager.getDefaultStateFile(this);
+    }
+
+    /** Cancels any pending debounced save and schedules a new one after a short delay, coalescing bursts. */
+    public void scheduleDebouncedSessionPersistenceSave() {
+        mHandler.removeCallbacks(mSessionPersistenceDebouncedSaveRunnable);
+        mHandler.postDelayed(mSessionPersistenceDebouncedSaveRunnable, SESSION_PERSISTENCE_DEBOUNCE_SAVE_DELAY_MS);
+    }
+
+    /** Captures and atomically persists the current terminal session state. Never throws. */
+    public synchronized void saveSessionPersistenceStateSafely() {
+        try {
+            List<TermuxSession> termuxSessions = mShellManager.mTermuxSessions;
+            int selectedIndex = getSelectedSessionIndexForPersistence();
+            SessionPersistenceState state = SessionPersistenceManager.captureState(termuxSessions, selectedIndex,
+                SessionPersistenceManager.DEFAULT_MAX_SCROLLBACK_CHARS_PER_SESSION);
+            SessionPersistenceManager.saveAtomic(getSessionPersistenceStateFile(), state);
+            Logger.logVerbose(LOG_TAG, "Persisted " + termuxSessions.size() + " terminal session(s) state");
+        } catch (Exception e) {
+            Logger.logError(LOG_TAG, "Failed to persist terminal session state: " + e.getMessage());
+        }
+    }
+
+    private int getSelectedSessionIndexForPersistence() {
+        TermuxAppSharedPreferences preferences = TermuxAppSharedPreferences.build(this);
+        if (preferences == null) return mShellManager.mTermuxSessions.isEmpty() ? -1 : mShellManager.mTermuxSessions.size() - 1;
+
+        String currentSessionHandle = preferences.getCurrentSession();
+        TerminalSession currentSession = currentSessionHandle == null ? null : getTerminalSessionForHandle(currentSessionHandle);
+        int index = getIndexOfSession(currentSession);
+        if (index >= 0) return index;
+
+        return mShellManager.mTermuxSessions.isEmpty() ? -1 : mShellManager.mTermuxSessions.size() - 1;
+    }
+
+    /**
+     * Restores terminal session tabs from a previously persisted state file, if one exists and no
+     * sessions already exist in this process (e.g. a fresh process start, not a configuration
+     * change). This is the startup restore path; it runs once per process from {@link #onCreate()}.
+     */
+    private synchronized void restorePersistedSessionsIfNeeded() {
+        if (mSessionPersistenceRestoreAttempted) return;
+        mSessionPersistenceRestoreAttempted = true;
+
+        if (!mShellManager.mTermuxSessions.isEmpty()) return;
+
+        File stateFile = getSessionPersistenceStateFile();
+        SessionPersistenceState state = SessionPersistenceManager.loadIfPresent(stateFile);
+        if (state == null || state.sessions.isEmpty()) return;
+
+        Logger.logDebug(LOG_TAG, "Restoring " + state.sessions.size() + " persisted terminal session(s)");
+
+        TerminalSession selectedTerminalSession = null;
+        for (int i = 0; i < state.sessions.size(); i++) {
+            TerminalSessionSnapshot snapshot = state.sessions.get(i);
+            TermuxSession restoredSession = createTermuxSession(null, null, null,
+                snapshot.workingDirectory, false, snapshot.sessionName);
+            if (restoredSession == null) continue;
+
+            TerminalSession restoredTerminalSession = restoredSession.getTerminalSession();
+            // TerminalSession's emulator (and the underlying shell subprocess) is normally only
+            // created lazily when a TerminalView actually gets laid out and calls updateSize() on
+            // it (see TerminalSession#initializeEmulator()). On restore, only whichever tab ends
+            // up selected gets attached to a view at startup, so every other restored tab would be
+            // left with no emulator at all: applySnapshot() would silently no-op (nothing to
+            // append saved scrollback text to), and its shell would never actually start running.
+            // Force-initialize here with placeholder dimensions so every restored tab's shell
+            // starts and its saved content gets replayed immediately; TerminalView.updateSize()
+            // resizes (not re-spawns) once it attaches with real dimensions later.
+            restoredTerminalSession.updateSize(
+                RESTORE_PLACEHOLDER_COLUMNS, RESTORE_PLACEHOLDER_ROWS,
+                RESTORE_PLACEHOLDER_CELL_WIDTH_PIXELS, RESTORE_PLACEHOLDER_CELL_HEIGHT_PIXELS);
+
+            SessionPersistenceManager.applySnapshot(snapshot, restoredTerminalSession);
+
+            if (i == state.selectedIndex) selectedTerminalSession = restoredTerminalSession;
+        }
+
+        if (selectedTerminalSession != null) {
+            TermuxAppSharedPreferences preferences = TermuxAppSharedPreferences.build(this);
+            if (preferences != null) preferences.setCurrentSession(selectedTerminalSession.mHandle);
+        }
     }
 
 }

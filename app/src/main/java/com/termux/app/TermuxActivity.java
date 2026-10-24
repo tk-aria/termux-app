@@ -323,6 +323,20 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+
+        Logger.logVerbose(LOG_TAG, "onPause");
+
+        if (mIsInvalidState) return;
+
+        // Session persistence trigger: the activity may not get onStop()/onDestroy() reliably
+        // called before the process is killed (e.g. low memory), so also save here.
+        if (mTermuxService != null)
+            mTermuxService.saveSessionPersistenceStateSafely();
+    }
+
+    @Override
     protected void onStop() {
         super.onStop();
 
@@ -342,6 +356,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         unregisterTermuxActivityBroadcastReceiver();
         getDrawer().closeDrawers();
+
+        // Session persistence trigger.
+        if (mTermuxService != null)
+            mTermuxService.saveSessionPersistenceStateSafely();
     }
 
     @Override
